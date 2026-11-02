@@ -343,7 +343,7 @@ def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "20
     return _with_steady_spend(geos, dates, rng, LEVELS["ugc"] * _size(geos) * on)
 
 
-HOLDOUT_BUDGET_SCALE = 1.7  # test budget vs the usual UGC level; sized in the notebook's section 8
+HOLDOUT_BUDGET_SCALE = 1.7  # test budget vs the usual UGC level; sized in the notebook's section 9
 
 
 def random_holdout_scenario(geos, dates, rng, start: str = "2026-03-01", end: str = "2026-04-25",
