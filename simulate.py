@@ -58,7 +58,7 @@ class WorldConfig:
     """Every knob of the simulated world, in one place."""
 
     n_geos: int = 50                 # number of regions (think: US metro areas)
-    start_date: str = "2024-01-01"
+    start_date: str = "2025-01-01"
     n_days: int = 730                # two years of daily data
     seed: int = 42                   # same seed -> same world, every time
 
@@ -327,8 +327,8 @@ def intro_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.G
     }
 
 
-def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "2025-03-01",
-                     end: str = "2025-11-30", read_noise: float = 0.03) -> dict[str, np.ndarray]:
+def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "2026-03-01",
+                     end: str = "2026-11-30", read_noise: float = 0.03) -> dict[str, np.ndarray]:
     """Hot markets, the trap: launch UGC in the regions that LOOK like they're growing fastest.
 
     The marketer can't see true growth, only a noisy read of it (reports, gut
@@ -343,17 +343,25 @@ def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "20
     return _with_steady_spend(geos, dates, rng, LEVELS["ugc"] * _size(geos) * on)
 
 
-def random_holdout_scenario(geos, dates, rng, start: str = "2025-03-01", end: str = "2025-04-25",
-                 share: float = 0.5) -> dict[str, np.ndarray]:
-    """Random holdout, the experiment: a coin flip decides which regions get UGC for an 8-week test."""
+HOLDOUT_BUDGET_SCALE = 1.7  # test budget vs the usual UGC level; sized in the notebook's section 8
+
+
+def random_holdout_scenario(geos, dates, rng, start: str = "2026-03-01", end: str = "2026-04-25",
+                            share: float = 0.5, budget_scale: float | None = None) -> dict[str, np.ndarray]:
+    """Random holdout, the experiment: a coin flip decides which regions get UGC for an 8-week test.
+
+    budget_scale: test spend as a multiple of the usual UGC level. The test is sized
+    before it runs so it can detect a return of $1 per $1 with 80% power.
+    """
+    scale = HOLDOUT_BUDGET_SCALE if budget_scale is None else budget_scale
     treated = rng.permutation(len(geos))[: round(share * len(geos))]
     on = np.zeros((len(geos), len(dates)))
     on[treated] = _between(dates, start, end)
-    return _with_steady_spend(geos, dates, rng, LEVELS["ugc"] * _size(geos) * on)
+    return _with_steady_spend(geos, dates, rng, scale * LEVELS["ugc"] * _size(geos) * on)
 
 
-def test_markets_scenario(geos, dates, rng, n_markets: int = 3, start: str = "2025-04-01",
-                          end: str = "2025-06-30") -> dict[str, np.ndarray]:
+def test_markets_scenario(geos, dates, rng, n_markets: int = 3, start: str = "2026-04-01",
+                          end: str = "2026-06-30") -> dict[str, np.ndarray]:
     """Test markets: try UGC in a few typical markets for three months.
 
     "Typical" means mid-sized AND growing at an ordinary pace: the marketer skips
