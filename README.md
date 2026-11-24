@@ -42,7 +42,8 @@ A coin flip picked 25 of 50 regions for an 8-week test. **True return: $1.33 per
 ![Geo experiment: CUPED vs the simple comparison](images/geo_experiment.png)
 
 - **Sized before launch.** Placebo tests on the year before showed the planned budget had only a 39% chance of detecting a $1 return. I compared levers (a 12- or 16-week test: 46–48%; 100 or 200 regions: 54–71%; a 1.7× test budget: 82%) and ran the test at 1.7×.
-- **CUPED makes the test readable.** CUPED adjusts each region for its pre-test sales. The simple comparison gives $3.79 (95% interval −$7.39 to $14.98). CUPED gives **$1.42 ($0.72 to $2.13)**, about 16× narrower, with the truth inside.
+- **The coin flip makes it fair; CUPED makes it precise.** The simple comparison of UGC regions vs control regions is unbiased on average, but gives $3.79 (95% interval −$7.39 to $14.98). CUPED, which adjusts each region for its pre-test sales, gives **$1.42 ($0.72 to $2.13)**, an interval about 16× narrower, with the truth inside.
+- **More precision can't fix an unfair comparison.** The same CUPED reading on the hot-markets data gives $4.52 ($3.06 to $5.98) against a true $1.69. Across 30 simulated worlds it averaged 3.6× the truth, and its interval contained the truth in 1 of 30.
 - **Checked across 60 simulated worlds:**
   - average error +$0.05;
   - the 95% interval contained the truth 97% of the time;
