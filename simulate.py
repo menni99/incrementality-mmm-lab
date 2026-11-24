@@ -1,16 +1,16 @@
 """
-simulate.py: builds the fake marketing world for the incrementality study.
+simulate.py: builds the simulated marketing world for the incrementality study.
 
 We write the "laws of physics" for a pretend brand, so we KNOW the true causal
 effect of UGC spend and can grade every measurement method against it.
 
-The world is built in layers, one small function each:
-  1. Baseline sales: what each region sells with no marketing at all   <- built
-  2. Adstock: ad effects that carry over across days                   <- built
-  3. Saturation: diminishing returns on spend                          <- built
-  4. Channels + halo: UGC, search, social; UGC lifts branded search    <- built
+The world is built in layers (matching sections 1-5 of the notebook), one small function each:
+  1. Baseline sales: what each region sells with no marketing at all
+  2. Adstock: ad effects that carry over across days
+  3. Saturation: diminishing returns on spend
+  4. Channels + halo: UGC, search, social; UGC lifts branded search,
      plus what each ad platform REPORTS (last-click credit)
-  5. Scenarios: who gets UGC, when, and how much                       <- built
+  5. Scenarios: who gets UGC, when, and how much
      hot_markets_scenario:    UGC goes to regions that look hot (the confounding trap)
      random_holdout_scenario: a coin flip picks the UGC regions (randomized experiment)
      test_markets_scenario:   UGC in a few test markets (for synthetic control)
@@ -20,6 +20,7 @@ Columns starting with "true_" are the hidden truth. A real analyst would only
 ever see the date, region, spend, platform-reported revenue and total sales.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -71,9 +72,9 @@ class WorldConfig:
     seasonal_amplitude: float = 0.20    # yearly swing of +/-20%, peaking in December
     noise_sd: float = 0.05              # fresh day-to-day randomness (~5%)
     shock_sd: float = 0.04              # "sticky" regional shocks: local events lasting days to weeks
-    cluster_shock_sd: float = 0.03      # shocks shared by neighbouring regions (weather, local economy)
+    cluster_shock_sd: float = 0.03      # shocks shared by neighboring regions (weather, local economy)
     shock_persistence: float = 0.9      # share of yesterday's shock that carries into today
-    n_clusters: int = 5                 # groups of neighbouring regions
+    n_clusters: int = 5                 # groups of neighboring regions
     growth_drift_sd: float = 0.04       # each region's sales level wanders, typically ~4% over a year
 
     # --- Marketing channels (layer 4) ---
@@ -81,9 +82,6 @@ class WorldConfig:
     ugc_halo: float = 0.5               # for every $1 UGC sells directly, another $0.50 arrives via branded search
     ugc_response_spread: float = 0.3    # UGC works better in some regions than others
     ugc_response_growth_link: float = 0.5  # ...and tends to work better in faster-growing regions
-
-    # --- Search and social budgets ---
-    regional_swing: float = 0.10        # each region's search/social budget also moves ~10% week to week
 
     # --- What ad platforms report (last-click attribution) ---
     # Platforms count clicks, and clicks follow spend, not what the ad actually caused.
@@ -95,6 +93,8 @@ class WorldConfig:
     halo_clicks_per_dollar: float = 0.4  # branded searches set off by UGC, credited to search, per $1 of UGC
     tracking_region_spread: float = 0.25  # tracking works better in some regions than others
     tracking_weekly_noise: float = 0.15   # ...and the credit each platform claims wobbles week to week
+    demand_growth_noise: float = 0.03     # platforms' view of demand: its own growth guess per region...
+    demand_shock_sd: float = 0.08         # ...and its own sticky wobbles, separate from real sales noise
 
 
 def make_geos(cfg: WorldConfig, rng: np.random.Generator) -> pd.DataFrame:
@@ -168,7 +168,7 @@ def baseline_sales(cfg: WorldConfig, geos: pd.DataFrame, rng: np.random.Generato
     Each piece is a multiplier, so effects scale with region size:
         sales = size x growth x weekday x season x holiday x noise
     where noise has four parts: fresh daily randomness, sticky regional shocks,
-    shocks shared by neighbouring regions, and a slow random wander in each region's level.
+    shocks shared by neighboring regions, and a slow random wander in each region's level.
     """
     dates = pd.date_range(cfg.start_date, periods=cfg.n_days, freq="D")
     t_years = np.arange(cfg.n_days) / 365.25
@@ -183,13 +183,18 @@ def baseline_sales(cfg: WorldConfig, geos: pd.DataFrame, rng: np.random.Generato
     drift = np.cumsum(rng.normal(0, cfg.growth_drift_sd / np.sqrt(365.25), (cfg.n_geos, cfg.n_days)), axis=1)
     noise = np.exp(fresh + regional + shared + drift)
 
-    sales = geos["base_sales"].to_numpy()[:, None] * growth * calendar_effects(cfg, dates) * noise
+    sales = _size(geos) * growth * calendar_effects(cfg, dates) * noise
 
     return pd.DataFrame({
         "geo": np.repeat(geos["geo"].to_numpy(), cfg.n_days),
         "date": np.tile(dates, cfg.n_geos),
         "baseline_sales": sales.ravel(),
     })
+
+
+def _size(geos: pd.DataFrame) -> np.ndarray:
+    """Each region's typical daily sales, as a column, so it broadcasts across days."""
+    return geos["base_sales"].to_numpy()[:, None]
 
 
 def adstock(spend: np.ndarray, carryover: float) -> np.ndarray:
@@ -233,7 +238,7 @@ def marketing_effects(spend: dict[str, np.ndarray], geos: pd.DataFrame, cfg: Wor
     and buy through a search ad, so those sales LOOK like search sales even
     though UGC caused them.
     """
-    size = geos["base_sales"].to_numpy()[:, None]
+    size = _size(geos)
     effects = {}
     for name, ch in cfg.channels.items():
         memory = adstock(spend[name], ch.carryover)
@@ -266,9 +271,9 @@ def platform_reports(spend: dict[str, np.ndarray], geos: pd.DataFrame, dates: pd
 
     # The brand's general demand, as the platforms see it: typical sales with its own
     # growth guess and its own sticky wobbles, independent of the real sales noise.
-    demand_growth = geos["growth_rate"].to_numpy() + rng.normal(0, 0.03, n_geos)
+    demand_growth = geos["growth_rate"].to_numpy() + rng.normal(0, cfg.demand_growth_noise, n_geos)
     demand = size * np.exp(np.outer(demand_growth, t_years)) * calendar_effects(cfg, dates)
-    demand = demand * np.exp(sticky_shocks(n_geos, n_days, 0.08, 0.9, rng))
+    demand = demand * np.exp(sticky_shocks(n_geos, n_days, cfg.demand_shock_sd, cfg.shock_persistence, rng))
 
     ugc_memory = adstock(spend["ugc"], cfg.channels["ugc"].carryover) * (1 - cfg.channels["ugc"].carryover)
     reports = {}
@@ -283,10 +288,6 @@ def platform_reports(spend: dict[str, np.ndarray], geos: pd.DataFrame, dates: pd
 
 
 LEVELS = {"search": 0.05, "social": 0.04, "ugc": 0.02}  # daily spend as a share of region size
-
-
-def _size(geos: pd.DataFrame) -> np.ndarray:
-    return geos["base_sales"].to_numpy()[:, None]
 
 
 def _between(dates: pd.DatetimeIndex, start: str, end: str) -> np.ndarray:
@@ -308,16 +309,18 @@ def steady_spend(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Gen
     return level * _size(geos) * regional * (national * q4)[None, :]
 
 
-def _with_steady_spend(geos, dates, rng, ugc: np.ndarray, regional_swing: float = 0.10) -> dict[str, np.ndarray]:
+def _with_steady_spend(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
+                       ugc: np.ndarray) -> dict[str, np.ndarray]:
+    """Every scenario's search and social budgets, plus the scenario's own UGC spend."""
     return {
-        "search": steady_spend(geos, dates, rng, LEVELS["search"], regional_swing=regional_swing),
-        "social": steady_spend(geos, dates, rng, LEVELS["social"], regional_swing=regional_swing),
+        "search": steady_spend(geos, dates, rng, LEVELS["search"]),
+        "social": steady_spend(geos, dates, rng, LEVELS["social"]),
         "ugc": ugc,
     }
 
 
 def intro_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
-                ugc_start: str, ugc_end: str) -> dict[str, np.ndarray]:
+                   ugc_start: str, ugc_end: str) -> dict[str, np.ndarray]:
     """Flat search and social, UGC on everywhere for one flight. Used to introduce the channels."""
     ones = np.ones((len(geos), len(dates)))
     return {
@@ -327,8 +330,9 @@ def intro_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.G
     }
 
 
-def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "2026-03-01",
-                     end: str = "2026-11-30", read_noise: float = 0.03) -> dict[str, np.ndarray]:
+def hot_markets_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
+                         n_markets: int = 20, start: str = "2026-03-01", end: str = "2026-11-30",
+                         read_noise: float = 0.03) -> dict[str, np.ndarray]:
     """Hot markets, the trap: launch UGC in the regions that LOOK like they're growing fastest.
 
     The marketer can't see true growth, only a noisy read of it (reports, gut
@@ -346,8 +350,9 @@ def hot_markets_scenario(geos, dates, rng, n_markets: int = 20, start: str = "20
 HOLDOUT_BUDGET_SCALE = 1.7  # test budget vs the usual UGC level; sized in the notebook's section 9
 
 
-def random_holdout_scenario(geos, dates, rng, start: str = "2026-03-01", end: str = "2026-04-25",
-                            share: float = 0.5, budget_scale: float | None = None) -> dict[str, np.ndarray]:
+def random_holdout_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
+                            start: str = "2026-03-01", end: str = "2026-04-25", share: float = 0.5,
+                            budget_scale: float | None = None) -> dict[str, np.ndarray]:
     """Random holdout, the experiment: a coin flip decides which regions get UGC for an 8-week test.
 
     budget_scale: test spend as a multiple of the usual UGC level. The test is sized
@@ -360,7 +365,8 @@ def random_holdout_scenario(geos, dates, rng, start: str = "2026-03-01", end: st
     return _with_steady_spend(geos, dates, rng, scale * LEVELS["ugc"] * _size(geos) * on)
 
 
-def test_markets_scenario(geos, dates, rng, n_markets: int = 3, start: str = "2026-04-01",
+def test_markets_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
+                          n_markets: int = 3, start: str = "2026-04-01",
                           end: str = "2026-06-30") -> dict[str, np.ndarray]:
     """Test markets: try UGC in a few typical markets for three months.
 
@@ -380,8 +386,9 @@ def test_markets_scenario(geos, dates, rng, n_markets: int = 3, start: str = "20
     return _with_steady_spend(geos, dates, rng, LEVELS["ugc"] * _size(geos) * on)
 
 
-def always_on_scenario(geos, dates, rng, flight_weeks: int = 6, gap_weeks: int = 6,
-                   low: float = 0.2, high: float = 2.0, skip_chance: float = 0.15) -> dict[str, np.ndarray]:
+def always_on_scenario(geos: pd.DataFrame, dates: pd.DatetimeIndex, rng: np.random.Generator,
+                       flight_weeks: int = 6, gap_weeks: int = 6, low: float = 0.2, high: float = 2.0,
+                       skip_chance: float = 0.15) -> dict[str, np.ndarray]:
     """Always-on: UGC flights everywhere, at different sizes in different regions.
 
     Six weeks on, six weeks off. In each flight, each region gets its own budget,
@@ -400,7 +407,10 @@ def always_on_scenario(geos, dates, rng, flight_weeks: int = 6, gap_weeks: int =
     return _with_steady_spend(geos, dates, rng, ugc)
 
 
-def simulate_world(cfg: WorldConfig | None = None, scenario=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+Scenario = Callable[[pd.DataFrame, pd.DatetimeIndex, np.random.Generator], dict[str, np.ndarray]]
+
+
+def simulate_world(cfg: WorldConfig | None = None, scenario: Scenario | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build the world. Returns (geos, daily panel).
 
     scenario: optional function (geos, dates, rng) -> {channel: spend array}. Without
@@ -438,7 +448,7 @@ def true_iroas(panel: pd.DataFrame, channel: str) -> float:
     return caused / panel[f"spend_{channel}"].sum()
 
 
-def true_response(cfg: WorldConfig, scenario, budget_scale: float) -> float:
+def true_response(cfg: WorldConfig, scenario: Scenario, budget_scale: float) -> float:
     """The real UGC return per $1 if every UGC budget in the scenario were scaled by budget_scale.
 
     Reruns the same world with UGC spend multiplied (0.5 = half the budget, 2 = double),

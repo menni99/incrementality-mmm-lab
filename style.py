@@ -10,8 +10,12 @@ MUTED = "#898781"
 GRID = "#e1e0d9"
 SURFACE = "#fcfcfb"
 
+# Colors with a fixed meaning across charts
+UGC = SERIES[2]      # UGC spend, UGC regions and UGC's own curves are always green
+
 
 def apply():
+    """Set matplotlib defaults so every chart shares one look."""
     plt.rcParams.update({
         "figure.facecolor": SURFACE,
         "axes.facecolor": SURFACE,
@@ -34,4 +38,6 @@ def apply():
         "legend.frameon": False,
         "figure.figsize": (11, 4),
         "figure.dpi": 110,
+        "date.autoformatter.month": "%b %Y",
+        "date.autoformatter.year": "%Y",
     })
